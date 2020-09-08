@@ -1,3 +1,5 @@
+const RENDER_TO_DOM = Symbol("render to dom");
+
 // 元素类，用于实例化Dom元素
 class ElementWapper {
     constructor(type){
@@ -5,11 +7,26 @@ class ElementWapper {
     };
 
     setAttribute(name,value){
-        this.root.setAttribute(name,value);
+        if(name.match(/^on([\s\S]+)$/)){
+            this.root.addEventListener(RegExp.$1.replace(/^[\s\S]/,c=>c.toLowerCase()),value)
+        }else{
+            if(name==="className"){
+                name = 'class';
+            }
+            this.root.setAttribute(name,value);
+        }
     };  
 
     appendChild(component){
-        this.root.appendChild(component.root);
+        let range = document.createRange();
+        range.setStart(this.root,this.root.childNodes.length);
+        range.setEnd(this.root,this.root.childNodes.length);
+        range.deleteContents();
+        component[RENDER_TO_DOM](range);
+    }
+    [RENDER_TO_DOM](range){
+        range.deleteContents();
+        range.insertNode(this.root);
     }
 }
 // 文本类，用于实例化文本
@@ -17,6 +34,10 @@ class TextWapper {
     constructor(content){
         this.root = document.createTextNode(content);
     };
+    [RENDER_TO_DOM](range){
+        range.deleteContents();
+        range.insertNode(this.root);
+    }
 }
 
 // toy-react 基类，所有自定义组件需要继承它
@@ -26,6 +47,7 @@ export class Component {
             children:[]
         });
         this._root = null;
+        this._range = null;
     }
     setAttribute(name,value){
         this.props[name]=value;
@@ -33,12 +55,36 @@ export class Component {
     appendChild(component){
         this.props.children.push(component);
     }
-    // render函数会获取root属性，从而触发递归调用，构建完整的Dom树。深度搜索优先
-    get root(){
-        if(!this._root){
-            this._root = this.render().root;
+    [RENDER_TO_DOM](range){
+        this._range = range;
+        this.render()[RENDER_TO_DOM](range);
+    }
+    rerender(){
+        let oldRange = this._range;
+        let range = document.createRange();
+        range.setStart(oldRange.startContainer,oldRange.startOffset);
+        range.setEnd(oldRange.startContainer,oldRange.startOffset)
+        this[RENDER_TO_DOM](range);
+        oldRange.setStart(range.endContainer,range.endOffset);
+        oldRange.deleteContents(range);
+    }
+    setState(newState){
+        if(this.state ===null || typeof this.state !=='object' ){
+            this.state = newState;
+            this.rerender();
+            return;
         }
-        return this._root;
+        let merge = (oldState,newState)=>{
+            for(let p in newState){
+                if(oldState[p]===null || typeof oldState[p] !=='object'){
+                    oldState[p]=newState[p];
+                }else{
+                    merge(oldState[p],newState[p]);
+                }
+            }
+        }
+        merge(this.state,newState);
+        this.rerender();
     }
 }
 
@@ -67,7 +113,10 @@ export function createElement(type,attributes,...children){
             if(typeof child ==='object' && child instanceof Array){
                 insterChildren(child);
             }else{
-                if(typeof child==='string'){
+                if(child === null){
+                    continue;
+                }
+                if(typeof child==='string'||typeof child==='number'){
                     child = new TextWapper(child);
                 }
                 e.appendChild(child);
@@ -79,5 +128,9 @@ export function createElement(type,attributes,...children){
 }
 
 export function render(component,parentComponent){
-    parentComponent.appendChild(component.root);
+    let range = document.createRange();
+    range.setStart(parentComponent,0);
+    range.setEnd(parentComponent,parentComponent.childNodes.length);
+    range.deleteContents();
+    component[RENDER_TO_DOM](range);
 }
