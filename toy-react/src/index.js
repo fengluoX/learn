@@ -1,4 +1,5 @@
 import { createElement, Component,render } from './toy-react';
+import './index.css';
 
 class Square extends Component {
     render() {
