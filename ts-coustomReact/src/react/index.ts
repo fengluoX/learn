@@ -7,6 +7,7 @@ abstract class Component {
         this._root = null;
     }
     props: Record<string, any>;
+    state?: Record<string, any>;
     protected _root: HTMLElement;
     get root() {
         if (!this._root) {
@@ -20,6 +21,29 @@ abstract class Component {
     appendChild(node: HTMLElement | Text) {
         this.props.children.push(node);
     }
+    setState(newState: Record<string, any>) {
+        if (!this.state || typeof this.state !== 'object') {
+            this.state = newState;
+        } else {
+            let merge = (oldState: Record<string, any>, newState: Record<string, any>) => {
+                for (let p in newState) {
+                    if (oldState[p] === null || typeof oldState[p] !== 'object') {
+                        oldState[p] = newState[p];
+                    } else {
+                        merge(oldState[p], newState[p]);
+                    }
+                }
+            }
+            merge(this.state, newState);
+        }
+        this.rerender();
+    }
+    rerender() {
+        const { parentNode } = this._root;
+        parentNode.removeChild(this._root);
+        this._root = this.render();
+        parentNode.appendChild(this._root);
+    }
     abstract render(): HTMLElement
 }
 
@@ -32,8 +56,12 @@ class ElementWrapper {
     get root() {
         return this._root;
     }
-    setAttribute(name: string, value: string) {
-        this._root.setAttribute(name === 'className' ? 'class' : name, value)
+    setAttribute(name: string, value: any) {
+        if (name.match(/^on([\s\S]+)$/)) {
+            this._root.addEventListener(RegExp.$1.replace(/^[\s\S]/, c => c.toLocaleLowerCase()), value);
+        } else {
+            this._root.setAttribute(name === 'className' ? 'class' : name, value)
+        }
     }
     appendChild(node: HTMLElement | Text) {
         this._root.appendChild(node);
@@ -61,6 +89,9 @@ const createElement = (
     }
     const insertChild = (children: Array<string | HTMLElement | Array<string | HTMLElement>>) => {
         for (let child of children) {
+            if(!child){
+                continue;
+            }
             if (typeof child !== 'object') {
                 let textNode = document.createTextNode(child);
                 root.appendChild(textNode);

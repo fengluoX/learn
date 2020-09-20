@@ -539,3 +539,104 @@ module.exports = {
                     ```
 
                     这里的ExtendsComponent类纯粹是为了得到一个继承抽象类的类的类型，如果你有更好的方法，可以告诉我
+
+3. 增加setState以及事件处理
+
+    + 目前我们的ts-react只能展示，而没有任何交互的作用，所以，我们需要为它添加事件支持，以及数据更新视图的能力
+
+    1. 增加事件处理
+
+        + 事件处理是比较好做的，我们只需要将`/^on`开头的属性进行小写转化，并用`addEventListener`来挂载监听就好，我们对`ElementWrapper`做一些处理就好，代码如下：
+
+        ```ts
+            class ElementWrapper {
+                // ...
+                setAttribute(name: string, value: any) {
+                    if (name.match(/^on([\s\S]+)$/)) {
+                        console.log(RegExp.$1)
+                        this._root.addEventListener(RegExp.$1.replace(/^[\s\S]/, c => c.toLocaleLowerCase()), value);
+                    } else {
+                        this._root.setAttribute(name === 'className' ? 'class' : name, value)
+                    }
+                }
+            }
+        ```
+
+    2. 增加数据更新试图的能力，即`setState`
+
+        1. 分析&实现
+
+            首先，我们的所有数据改变，都需要通过`setState`来进行修改，同时，`setState`会在每个自定义子类里都存在，所以我们应当将其放在`Component`里来实现，同时，我们需要在每次更新数据后，更新我们的视图
+
+            ```ts
+                abstract class Component {
+                    // ...
+                    state?: Record<string, any>;
+                    setState(newState: Record<string, any>) {
+                        if (!this.state || typeof this.state !== 'object') {
+                            this.state = newState;
+                        } else {
+                            let merge = (oldState: Record<string, any>, newState: Record<string, any>) => {
+                                for (let p in newState) {
+                                    if (oldState[p] === null || typeof oldState[p] !== 'object') {
+                                        oldState[p] = newState[p];
+                                    } else {
+                                        merge(oldState[p], newState[p]);
+                                    }
+                                }
+                            }
+                            merge(this.state, newState);
+                        }
+                        this.rerender();
+                    }
+                    rerender() {
+                        const { parentNode } = this._root;
+                        parentNode.removeChild(this._root);
+                        this._root = this.render();
+                        parentNode.appendChild(this._root);
+                    }
+                }
+            ```
+
+        2. 完善
+
+            我们可以看到目前已经可以渲染了，让我们把React的官网demo放进来试一下，另外，我们的`ts-react`不支持函数组件，所以需要将函数组件改成类组件
+
+            ```ts
+                // ...
+                import './index.css';
+                class Square extends Component {
+                    render(){
+                        return (
+                            <button className="square" onClick={this.props.onClick}>
+                                {this.props.value}
+                            </button>
+                        );
+                    }
+                }
+                // ...
+                render(<Game />, document.body);
+            ```
+
+            创建我们的index.css，将官网样式copy一份进来
+
+            我们发现，页面报错了，错误出在`root.appendChild(child);`这一行，也就是，我们的child出问题了，打印发现，我们的child可能会是`null`,所以我们需要这样处理一下：
+
+            ```ts
+                // function createElement ->inserChild
+                for (let child of children) {
+                    if(!child){
+                        continue;
+                    }
+                    if (typeof child !== 'object') {
+                        let textNode = document.createTextNode(child);
+                        root.appendChild(textNode);
+                    } else if (child instanceof Array) {
+                        insertChild(child)
+                    } else {
+                        root.appendChild(child);
+                    }
+                }
+            ```
+
+            好了，我们可以看到react官网的demo已经成功跑起来了，近乎完美，不是么
