@@ -9,10 +9,12 @@ abstract class Component {
     props: Record<string, any>;
     state?: Record<string, any>;
     protected _root: HTMLElement;
+    private vdom:HTMLElement;
     get root() {
         if (!this._root) {
             this._root = this.render();
         }
+        this.vdom = this._root;
         return this._root;
     }
     setAttribute(name: string, value: any) {
