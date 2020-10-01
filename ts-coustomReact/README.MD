@@ -647,6 +647,398 @@ module.exports = {
 
     1. 存储vdom
 
-        1. 分析：要实现vdom，我们需要在创建时记录我们的Dom节点，并且在更新视图的时候，优先更新我们的vdom，然后通过vdom，去更新我们的Dom树，我们vdom是一个树形结构，每个节点代表我们的一个基于`Component`的类，`ElementWrapper`与`TextWrapper`也不例外。
+        + 分析：要实现vdom，我们需要在创建时记录我们的Dom节点，并且在更新视图的时候，优先更新我们的vdom，然后通过vdom，去更新我们的Dom树，我们vdom是一个树形结构，每个节点代表我们的一个基于`Component`的类，`ElementWrapper`也不例外。
 
-        2. `Component`类存储vdom
+        1. 通过之前的代码我们知道，我们的render函数返回的内容，其实是`createElement`的返回值来决定的。而我们要统一的话，首要就是要改造`createElement`函数，让它返回一个`Component`类，而不是一个dom节点，同时还要改造render的返回类型，返回`Component`实例，同时达到`Component`是所有节点的父类型，我们需要新增`TextWrapper`类，来继承Component，它用来代表文本节点，代码如下：
+
+            ```ts
+                abstract class Component {
+                    constructor() {
+                        this.props = {
+                            children: []
+                        };
+                        this._root = null;
+                    }
+                    props: Record<string, any>;
+                    state?: Record<string, any>;
+                    protected _root: Component;
+                    get root() {
+                        if (!this._root) {
+                            this._root = this.render();
+                        }
+                        return this._root;
+                    }
+                    setAttribute(name: string, value: any) {
+                        if (name !== 'children') {
+                            this.props[name] = value;
+                        }
+                    }
+                    appendChild(node: Component) {
+                        this.props.children.push(node);
+                    }
+                    setState(newState: Record<string, any>) {
+                        if (!this.state || typeof this.state !== 'object') {
+                            this.state = newState;
+                        } else {
+                            let merge = (oldState: Record<string, any>, newState: Record<string, any>) => {
+                                for (let p in newState) {
+                                    if (oldState[p] === null || typeof oldState[p] !== 'object') {
+                                        oldState[p] = newState[p];
+                                    } else {
+                                        merge(oldState[p], newState[p]);
+                                    }
+                                }
+                            }
+                            merge(this.state, newState);
+                        }
+                    }
+                    abstract render(): Component
+                }
+
+                class ElementWrapper extends Component {
+                    constructor(type: string) {
+                        super();
+                        this.type = type;
+                    }
+                    type: string;
+                    render() {
+                        return new ElementWrapper(this.type);
+                    }
+                }
+
+                class TextWrapper extends Component {
+                    constructor(content: string) {
+                        super();
+                        this.content = content;
+                    }
+                    content: string;
+                    render() {
+                        return new TextWrapper(this.content);
+                    }
+                }
+
+                // 纯粹是为了得到一个继承于Component的类的类型，为createElement提供参数类型
+                class ExtendsComponent extends Component {
+                    render: () => Component;
+                }
+
+                const createElement = (
+                    type: string | typeof ExtendsComponent,
+                    props: Record<string, string> | null,
+                    ...children: Array<string | Component | Array<string | Component>>
+                ): Component => {
+                    let root: ElementWrapper | Component;
+                    if (typeof type === 'string') {
+                        root = new ElementWrapper(type);
+                    } else {
+                        root = new type();
+                    }
+                    for (let p in props) {
+                        root.setAttribute(p, props[p]);
+                    }
+                    const insertChild = (children: Array<string | Component | Array<string | Component>>) => {
+                        for (let child of children) {
+                            if (!child) {
+                                continue;
+                            }
+                            if (typeof child !== 'object') {
+                                let textNode = new TextWrapper(child);
+                                root.appendChild(textNode);
+                            } else if (child instanceof Array) {
+                                insertChild(child)
+                            } else {
+                                root.appendChild(child);
+                            }
+                        }
+                    }
+                    insertChild(children);
+                    return root;
+                }
+
+                const render = (element: Component, parentElement: HTMLElement) => {
+                    parentElement.appendChild(element);
+                }
+
+                export {
+                    Component,
+                    createElement,
+                    render
+                }
+
+
+            ```
+
+        2. 经过这一番改造，我们惊喜的发现，项目挂了。不过，不要急，这是因为我们干掉了之前的render逻辑，接下来我们来为`Component`,`ElementWrapper`,`TextWrapper`实现`renderToDom`方法,代码如下：
+
+            ```ts
+                abstract class Component {
+                    // ...
+                    private root: HTMLElement;
+                    // ...
+                    setState(newState: Record<string, any>) {
+                        // ...
+                        this.renderToDom(this.root);
+                    }
+                    public renderToDom(parentElement: HTMLElement) {
+                        this.root = parentElement;
+                        this.render().renderToDom(parentElement);
+                    }
+                    abstract render(): Component
+                }
+
+                class ElementWrapper extends Component {
+                    constructor(type: string) {
+                        super();
+                        this.type = type;
+                    }
+                    type: string;
+                    render() {
+                        return new ElementWrapper(this.type);
+                    }
+                    public renderToDom(parentElement: HTMLElement) {
+                        const node = document.createElement(this.type);
+                        for (let p in this.props) {
+                            if (p !== 'children') {
+                                if (p.startsWith('on')) {
+                                    parentElement.addEventListener(p.toLocaleLowerCase().slice(2), this.props[p]);
+                                } else {
+                                    node.setAttribute(p === 'className' ? 'class' : p, this.props[p]);
+                                }
+                            }
+                        }
+                        this.props.children.forEach(item => {
+                            item.renderToDom(node);
+                        })
+                        parentElement.appendChild(node);
+                    }
+                }
+
+                class TextWrapper extends Component {
+                    constructor(content: string) {
+                        super();
+                        this.content = content;
+                    }
+                    content: string;
+                    render() {
+                        return new TextWrapper(this.content);
+                    }
+                    public renderToDom(parentElement: HTMLElement) {
+                        const node = document.createTextNode(this.content);
+                        parentElement.appendChild(node);
+                    }
+                }
+
+                // 纯粹是为了得到一个继承于Component的类的类型，为createElement提供参数类型
+                class ExtendsComponent extends Component {
+                    render: () => Component;
+                }
+
+                const createElement = (
+                    type: string | typeof ExtendsComponent,
+                    props: Record<string, string> | null,
+                    ...children: Array<string | Component | Array<string | Component>>
+                ): Component => {
+                    let root: ElementWrapper | Component;
+                    // ...
+                    const insertChild = (children: Array<string | Component | Array<string | Component>>) => {
+                        for (let child of children) {
+                            // ...
+                            if (typeof child !== 'object') {
+                                let textNode = new TextWrapper(child);
+                                root.appendChild(textNode);
+                            }
+                            // ...
+                        }
+                    }
+                    insertChild(children);
+                    return root;
+                }
+                const render = (element: Component, parentElement: HTMLElement) => {
+                    element.renderToDom(parentElement);
+                }
+            ```
+
+        3. 引入range来实现更新
+
+            经过改造后，我们发现页面重新渲染出来了，但是我们每次点击，都是在下方渲染出一个新的Dom树，原因是我们在appendChild是未能删掉之前的元素，而如果要删掉之前的元素，则我们需要精确的知道我们之前元素的位置。首先我们想到的可能是外部增加一个元素，来作为当前组件的根源是，但是这样实现会有问题，元素会有自带布局，不适用，那么fragment呢，也不行，它在appendChild后，就丢失引用了。最终，我们发现了`range`系列的api，它可以实现我们的需求，有关`range`系列的api，请参考[MDN文档](https://developer.mozilla.org/zh-CN/docs/Web/API/Range);具体实现代码如下：
+
+            ```ts
+                abstract class Component {
+                    // ...
+                    protected range : Range;
+                    // ...
+                    setState(newState: Record<string, any>) {
+                        // ...
+                        this.renderToDom(this.range);
+                    }
+                    public renderToDom(range: Range) {
+                        this.range = range;
+                        this.render().renderToDom(range);
+                    }
+                }
+
+                function replaceRange(range:Range,node:HTMLElement|Text){
+                    range.insertNode(node);
+                    range.setStartAfter(node);
+                    range.deleteContents();
+                    range.setStartBefore(node);
+                    range.setEndAfter(node);
+                }
+
+                class ElementWrapper extends Component {
+                    // ...
+                    public renderToDom(range: Range) {
+                        // ...
+                        this.props.children.forEach(item => {
+                            const childRange = document.createRange();
+                            childRange.setStart(node,node.childNodes.length);
+                            childRange.setEnd(node,node.childNodes.length);
+                            childRange.deleteContents();
+                            item.renderToDom(childRange);
+                        })
+                        this.range = range;
+                        replaceRange(range,node);
+                    }
+                }
+
+                class TextWrapper extends Component {
+                    // ...
+                    public renderToDom(range: Range) {
+                        this.range = range;
+                        const node = document.createTextNode(this.content);
+                        replaceRange(range,node);
+                    }
+                }
+                // ...
+                const render = (element: Component, parentElement: HTMLElement) => {
+                    const range = document.createRange();
+                    range.setStart(parentElement,0);
+                    range.setEnd(parentElement,parentElement.childNodes.length);
+                    range.deleteContents();
+                    element.renderToDom(range);
+                }
+            ```
+
+        4. 增加vdom来记录dom树
+
+            + 经过了上面这么多的改造，我们的代码已经具备了实现vdom的基础，接下来，我们需要实现vdom的存储了。代码很简单，如下：
+
+            ```ts
+                abstract class Component {
+                    // ...
+                    private oldVDom: HTMLElement;
+                    // ...
+                    get vdom() {
+                        return this.render().vdom;
+                    }
+                    public renderToDom(range: Range) {
+                        this.oldVDom = this.vdom;
+                        // ...
+                    }
+                }
+
+                class ElementWrapper extends Component {
+                    // ...
+                    get vdom() {
+                        return this;
+                    }
+                }
+
+                class TextWrapper extends Component {
+                    // ...
+                    get vdom() {
+                        return this;
+                    }
+                }
+
+                // 纯粹是为了得到一个继承于Component的类的类型，为createElement提供参数类型
+                class ExtendsComponent extends Component {
+                    render: () => Component;
+                }
+                // ...
+            ```
+
+    2. 到了现在，我们的vdom也存储好了，接下来就需要我们去对比新旧vdom，并去更新他们了,代码如下：
+
+        ```ts
+            abstract class Component {
+                constructor() {
+                    // ...
+                    this.range = null;
+                }
+                // ...
+                protected range: Range;
+                private oldVDom: Component;
+                // ...
+                setState(newState: Record<string, any>) {
+                    // ...
+                    this.update();
+                }
+                update(){
+                    let isSameNode = (oldNode,newNode)=>{
+                        if(oldNode.type!==newNode.type){
+                            return false;
+                        }
+                        for(let name in newNode.props){
+                            if(name==='children'){
+                                continue;
+                            }
+                            if(oldNode.props[name]!==newNode.props[name]){
+                                return false;
+                            }
+                        }
+                        if(Object.keys(oldNode).length>Object.keys(newNode).length){
+                            return false;
+                        }
+                        return true;
+                    }
+                    let update = (oldNode:Component,newNode:Component)=>{
+                        if(!isSameNode(oldNode,newNode)){
+                            newNode.renderToDom(oldNode.range);
+                            return;
+                        }
+                        newNode.range = oldNode.range;
+                        let newChildren = newNode.props.children;
+                        let oldChildren = oldNode.props.children;
+
+                        if(!newChildren||!newChildren.length){
+                            return;
+                        }
+                        let tailRange = oldChildren[oldChildren.length-1].range;
+                        for(let i=0;i<newChildren.length;i++){
+                            let newChild = newChildren[i];
+                            let oldChild = oldChildren[i];
+                            if(i<oldChildren.length){
+                                update(oldChild,newChild);
+                            }else{
+                                let range = document.createRange();
+                                range.setStart(tailRange.endContainer,tailRange.endOffset);
+                                range.setEnd(tailRange.endContainer,tailRange.endOffset);
+                                newChild.renderToDom(range);
+                                tailRange = range;
+                            }
+                        }
+                    }
+                    let vdom = this.vdom;
+                    update(this.oldVDom,vdom);
+                    this.oldVDom = vdom;
+                }
+                get vdom() {
+                    return this.render().vdom;
+                }
+                public renderToDom(range: Range) {
+                    this.oldVDom = this.vdom;
+                    this.range = range;
+                    this.oldVDom.renderToDom(range);
+                }
+            }
+            // ...
+        ```
+
+5. 总结
+
+    + 到此为止，我们已经完全模拟了react的实现，当然，真正的react肯定比这要复杂n倍。但万变不离其宗，其根本是不会变化的。
+
+    + 最后，吹一波ts。熟练使用类型系统，可以使我们在实现功能时从全局的角度考虑问题，养成更好的习惯。
+
+    + [源码地址](https://github.com/fengluoX/learn/tree/master/ts-coustomReact)。
